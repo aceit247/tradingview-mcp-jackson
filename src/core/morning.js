@@ -68,11 +68,25 @@ export async function runBrief({ rules_path } = {}) {
       await chart.setTimeframe({ timeframe: default_timeframe });
       await new Promise((r) => setTimeout(r, 900));
 
-      const [state, indicators, quote] = await Promise.all([
+      const [state, indicators, quote, ohlcv] = await Promise.all([
         chart.getState(),
         data.getStudyValues(),
         data.getQuote({}),
+        data.getOhlcv({ summary: true }).catch(() => null),
       ]);
+
+      // Best-effort Pine drawings — custom indicators may not have any
+      let pine = {};
+      try {
+        const [lines, labels, tables] = await Promise.all([
+          data.getPineLines({}).catch(() => null),
+          data.getPineLabels({}).catch(() => null),
+          data.getPineTables({}).catch(() => null),
+        ]);
+        if (lines?.success && lines.lines?.length) pine.lines = lines.lines;
+        if (labels?.success && labels.labels?.length) pine.labels = labels.labels;
+        if (tables?.success && tables.tables?.length) pine.tables = tables.tables;
+      } catch (_) {}
 
       results.push({
         symbol,
@@ -80,6 +94,8 @@ export async function runBrief({ rules_path } = {}) {
         state,
         indicators,
         quote,
+        ohlcv: ohlcv?.success ? ohlcv : null,
+        pine: Object.keys(pine).length ? pine : null,
       });
     } catch (err) {
       results.push({ symbol, error: err.message });
@@ -106,8 +122,9 @@ export async function runBrief({ rules_path } = {}) {
     },
     symbols_scanned: results,
     instruction: [
-      "For each symbol in symbols_scanned, apply the bias_criteria from rules to the indicator readings.",
-      "Output one line per symbol: SYMBOL | BIAS: [bullish/bearish/neutral] | KEY LEVEL: [price] | WATCH: [what to monitor]",
+      "For each symbol in symbols_scanned, apply the bias_criteria from rules to produce a morning brief.",
+      "Use indicators for momentum/trend signals, ohlcv for range/change context, pine.lines for key price levels, pine.labels for named levels (e.g. PDH, Settlement), and pine.tables for session stats.",
+      "Output one line per symbol: SYMBOL | BIAS: [bullish/bearish/neutral] | PRICE: [last] | KEY LEVEL: [nearest level or N/A] | WATCH: [what to monitor]",
       "End with a one-sentence overall market read.",
       "Be direct. No preamble.",
     ].join(" "),
